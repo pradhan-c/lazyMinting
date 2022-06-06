@@ -1,8 +1,6 @@
-//SPDX-License-Identifier: Unlicense
-pragma solidity ^0.8.0;
-pragma experimental ABIEncoderV2;
+//SPDX-License-Identifier: MIT
+pragma solidity ^0.8.4;
 
-import "hardhat/console.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
@@ -10,95 +8,175 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/draft-EIP712.sol";
 
 contract LazyNFT is ERC721URIStorage, EIP712, AccessControl {
-  using ECDSA for bytes32;
+ bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+ string private constant SIGNING_DOMAIN = "LazyNFT-Voucher";
+ string private constant SIGNATURE_VERSION = "1";
 
-  bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+ uint256 public totalminted;
+ address private signer;
 
-  mapping (address => uint256) pendingWithdrawals;
+ mapping(uint256 => bool) private mintedById;
 
-  constructor(address payable minter)
-    ERC721("LazyNFT", "LAZ") 
-    EIP712("LazyNFT-Voucher", "1") {
-      _setupRole(MINTER_ROLE, minter);
+//event for off-chain purchase
+ event RedeemedAndMinted(
+        address indexed signer,
+        address minter,
+        uint256 tokenId,
+        uint256 minPrice,
+        string tokenURI,
+        string name,
+        string description,
+        bytes signature
+);
+
+  event Bought(
+        uint itemId,
+         bool sold,
+         uint256 price,
+        address indexed seller,
+        address indexed buyer
+    );
+
+
+
+ 
+
+ constructor()
+  ERC721("LazyMINT", "LAZY")
+  EIP712(SIGNING_DOMAIN, SIGNATURE_VERSION)
+ {}
+
+ function setMinter(address _signer) internal {
+  signer = _signer;
+  _setupRole(MINTER_ROLE, signer);
+ }
+
+ function getMinter() public view returns (address) {
+  return signer;
+ }
+
+ function getTotalMinted() public view returns (uint256) {
+  return totalminted;
+ }
+
+ /// @notice Redeems an NFTVoucher for an actual NFT, creating it in the process.
+ /// @param redeemer The address of the account which will receive the NFT upon success.
+ function redeem(
+  address redeemer,
+  uint256 tokenId,
+  uint256 minPrice,
+  string memory uri,
+  string memory name,
+  string memory description,
+  bytes memory signature
+ ) public payable  {
+  require(minPrice > 0, "Price must be greater than zero");
+  // make sure signature is valid and get the address of the signer
+  signer = _verify(tokenId, minPrice, uri,name,description, signature);
+
+  // set the minter address in _setupRole
+  setMinter(signer);
+
+  //make sure owner cant buy his own nft
+  require(signer != msg.sender ,"You cant buy your own NFT");
+
+  // make sure that the signer is authorized to mint NFTs
+  require(hasRole(MINTER_ROLE, signer), "Signature invalid or unauthorized");
+
+  // make sure that the redeemer is paying enough to cover the buyer's cost
+  require(msg.value >= minPrice, "Insufficient funds to redeem");
+
+  // first assign the token to the signer, to establish provenance on-chain
+  _mint(signer, tokenId);
+  _setTokenURI(tokenId, uri);
+
+  _transfer(signer, redeemer, tokenId);
+  mintedById[tokenId] = true;
+
+  
+  emit RedeemedAndMinted(signer, redeemer,tokenId,minPrice,uri,name,description,signature);
+   
+  totalminted = totalminted + 1;
+
+  // send amount to the signer
+  (bool sent, ) = payable(signer).call{value: msg.value}("");
+  require(sent, "Failed to send Ether");
+ }
+
+  function purchaseItem(uint _itemId,uint256 price,address owner) external payable  {
+        require(msg.value > 0, "Price must be greater than zero");
+        _transfer(owner, msg.sender, _itemId);
+         // send amount to the signer
+        (bool sent, ) = payable(owner).call{value: msg.value}("");
+        require(sent, "Failed to send Ether");
+
+
+        // emit Bought event
+        emit Bought(
+            _itemId,
+            true,
+            price,
+            owner,
+            msg.sender
+        );
     }
 
-  /// @notice Represents an un-minted NFT, which has not yet been recorded into the blockchain. A signed voucher can be redeemed for a real NFT using the redeem function.
-  struct NFTVoucher {
-    /// @notice The id of the token to be redeemed. Must be unique - if another token with this ID already exists, the redeem function will revert.
-    uint256 tokenId;
+ /// @notice Verifies the signature for a given voucher data, returning the address of the signer.
+ /// @dev Will revert if the signature is invalid. Does not verify that the signer is authorized to mint NFTs.
+ function _verify(
+  uint256 tokenId,
+  uint256 minPrice,
+  string memory uri,
+  string memory name,
+  string memory description,
+  bytes memory signature
+ ) public view returns (address) {
+  bytes32 digest = _hash(tokenId, minPrice,name,description, uri);
+  return ECDSA.recover(digest, signature);
+ }
 
-    /// @notice The minimum price (in wei) that the NFT creator is willing to accept for the initial sale of this NFT.
-    uint256 minPrice;
+ /// @notice Returns a hash of the given data, prepared using EIP712 typed data hashing rules.
+ /// @param  tokenId for id of token
+ ///@param minPrice price of nft
+ ///@param uri metadata of the token
+ function _hash(
+  uint256 tokenId,
+  uint256 minPrice,
+  string memory name,
+  string memory description,
+  string memory uri
+ ) internal view returns (bytes32) {
+  return
+   _hashTypedDataV4(
+    keccak256(
+     abi.encode(
+      keccak256("NFTVoucher(uint256 tokenId,uint256 minPrice,string name,string description,string uri)"),
+      tokenId,
+      minPrice,
+      keccak256(bytes(name)),
+      keccak256(bytes(description)),
+      keccak256(bytes(uri))
+     )
+    )
+   );
+ }
 
-    /// @notice The metadata URI to associate with this token.
-    string uri;
+ /// @notice Returns the chain id of the current blockchain.
+ function getChainID() external view returns (uint256) {
+  uint256 id;
+  assembly {
+   id := chainid()
   }
+  return id;
+ }
 
-
-  /// @notice Redeems an NFTVoucher for an actual NFT, creating it in the process.
-  /// @param redeemer The address of the account which will receive the NFT upon success.
-  /// @param voucher An NFTVoucher that describes the NFT to be redeemed.
-  /// @param signature An EIP712 signature of the voucher, produced by the NFT creator.
-  function redeem(address redeemer, NFTVoucher calldata voucher, bytes memory signature) public payable returns (uint256) {
-    // make sure signature is valid and get the address of the signer
-    address signer = _verify(voucher, signature);
-
-    // make sure that the signer is authorized to mint NFTs
-    require(hasRole(MINTER_ROLE, signer), "Signature invalid or unauthorized");
-
-    // make sure that the redeemer is paying enough to cover the buyer's cost
-    require(msg.value >= voucher.minPrice, "Insufficient funds to redeem");
-
-    // first assign the token to the signer, to establish provenance on-chain
-    _mint(signer, voucher.tokenId);
-    _setTokenURI(voucher.tokenId, voucher.uri);
-    
-    // transfer the token to the redeemer
-    _transfer(signer, redeemer, voucher.tokenId);
-
-    // record payment to signer's withdrawal balance
-    pendingWithdrawals[signer] += msg.value;
-
-    return voucher.tokenId;
-  }
-
-  function withdraw() public {
-    require(hasRole(MINTER_ROLE, msg.sender), "Only authorized minters can withdraw");
-    
-    // IMPORTANT: casting msg.sender to a payable address is only safe if ALL members of the minter role are payable addresses.
-    address payable receiver = payable(msg.sender);
-
-    uint amount = pendingWithdrawals[receiver];
-    // zero account before transfer to prevent re-entrancy attack
-    pendingWithdrawals[receiver] = 0;
-    receiver.transfer(amount);
-  }
-
-  function availableToWithdraw() public view returns (uint256) {
-    return pendingWithdrawals[msg.sender];
-  }
-
-  /// @notice Returns a hash of the given NFTVoucher, prepared using EIP712 typed data hashing rules.
-  /// @param voucher An NFTVoucher to hash.
-  function _hash(NFTVoucher calldata voucher) internal view returns (bytes32) {
-    return _hashTypedDataV4(keccak256(abi.encode(
-      keccak256("NFTVoucher(uint256 tokenId,uint256 minPrice,string uri)"),
-      voucher.tokenId,
-      voucher.minPrice,
-      keccak256(bytes(voucher.uri))
-    )));
-  }
-
-  /// @notice Verifies the signature for a given NFTVoucher, returning the address of the signer.
-  /// @dev Will revert if the signature is invalid. Does not verify that the signer is authorized to mint NFTs.
-  /// @param voucher An NFTVoucher describing an unminted NFT.
-  /// @param signature An EIP712 signature of the given voucher.
-  function _verify(NFTVoucher calldata voucher, bytes memory signature) internal view returns (address) {
-    bytes32 digest = _hash(voucher);
-    return digest.toEthSignedMessageHash().recover(signature);
-  }
-
-  function supportsInterface(bytes4 interfaceId) public view virtual override (AccessControl, ERC721) returns (bool) {
-    return ERC721.supportsInterface(interfaceId) || AccessControl.supportsInterface(interfaceId);
-  }
+ function supportsInterface(bytes4 interfaceId)
+  public
+  view
+  virtual
+  override(AccessControl, ERC721)
+  returns (bool)
+ {
+  return super.supportsInterface(interfaceId);
+ }
 }
