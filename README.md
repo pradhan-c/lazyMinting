@@ -1,4 +1,4 @@
-#Lazy minting 
+#  Lazy minting 
 
 Lazy minting basically means that an artist can mint their NFT with Zero gas fees .For 
 normal minting artist has to pay a lot of gas fees to create the NFT but in lazy minting 
