@@ -7,7 +7,6 @@ thing . NFT’s can be anything digital like music , pictures , gif, video etc .
 financial support to artists all over the world. However there are major issues in the NFT 
 space like high gas costs for minting NFT’s resulting in market entry barriers , this is why a 
 feature called lazy minting was introduced as a solution for the high gas cost. 
----
 
 ## LAZY MINTING
 Lazy minting basically means that an artist can mint their NFT with Zero gas fees .For 
@@ -16,7 +15,6 @@ they don’t have to pay any gas fees . In Lazy minting the NFT is available “
 outside the blockchain and is minted only when the NFT is sold . This means that the 
 artist doesn’t need to pay any fees for the minting process . Here the buyer of the nft pays 
 for the purchase and minting nft ,so the artist doesn’t have to pay anything.
----
 
 ## ADVANTAGES
 1.Zero Gas Fees for the artist.
